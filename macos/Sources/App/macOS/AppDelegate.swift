@@ -951,7 +951,17 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func reloadConfig(_ sender: Any?) {
-        ghostty.reloadConfig()
+        let sessionPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-pods/ghostty-session.json")
+        if FileManager.default.fileExists(atPath: sessionPath) {
+            do {
+                _ = try SessionRestorer.restore(from: sessionPath, ghostty: ghostty)
+            } catch {
+                Ghostty.logger.error("hive session restore failed: \(error)")
+                ghostty.reloadConfig()
+            }
+        } else {
+            ghostty.reloadConfig()
+        }
     }
 
     @IBAction func checkForUpdates(_ sender: Any?) {
