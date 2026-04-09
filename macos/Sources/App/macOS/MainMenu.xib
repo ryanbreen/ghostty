@@ -110,6 +110,12 @@
                                     <action selector="restoreFromLatestHive:" target="bbz-4X-AYv" id="WRB-h1-v3t"/>
                                 </connections>
                             </menuItem>
+                            <menuItem title="Convert to Pod" keyEquivalent="p" id="WRB-p0-d1r">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES" shift="YES"/>
+                                <connections>
+                                    <action selector="convertToPod:" target="bbz-4X-AYv" id="WRB-p0-d1s"/>
+                                </connections>
+                            </menuItem>
                             <menuItem title="Secure Keyboard Entry" id="oC6-w4-qI7">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>

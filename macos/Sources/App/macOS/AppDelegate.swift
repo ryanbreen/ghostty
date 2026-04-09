@@ -954,6 +954,11 @@ class AppDelegate: NSObject,
         ghostty.reloadConfig()
     }
 
+    @IBAction func convertToPod(_ sender: Any?) {
+        guard let controller = NSApp.keyWindow?.windowController as? BaseTerminalController else { return }
+        PodConverter.convertFocusedToPod(controller: controller, ghostty: ghostty)
+    }
+
     @IBAction func restoreFromLatestHive(_ sender: Any?) {
         let sessionPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-pods/ghostty-session.json")
         guard FileManager.default.fileExists(atPath: sessionPath) else {
