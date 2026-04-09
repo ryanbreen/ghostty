@@ -109,95 +109,101 @@ enum SessionRestorer {
             throw SessionRestoreError.noWindows
         }
 
+        let windowsToRestore = session.windows
+
         // Snapshot existing windows keyed by title.
-        // Each entry holds: the primary controller and a set of existing tab titles.
         let existing = snapshotExistingWindows()
 
-        var summary = RestoreSummary()
-        var windowMap: [String: String] = [:]
+        let ourPID = ProcessInfo.processInfo.processIdentifier
 
-        for sessionWindow in session.windows {
+        // Each window opens its first tab after a delay, then its remaining tabs
+        // are staggered within that window. This keeps the main thread free.
+        //
+        // Timing:
+        //   window i opens at:          windowInterval * i
+        //   tab j of window i opens at: windowInterval * i  +  tabInterval * j
+        //   yabai placement at:         windowInterval * i  +  1.5
+        let windowInterval = 4.0  // seconds between window creations
+        let tabInterval    = 1.5  // seconds between tab additions within a window
+
+        let windowMap: [String: String] = [:]
+
+        Ghostty.logger.info("session restore: scheduling \(windowsToRestore.count) window(s)…")
+
+        for (windowIndex, sessionWindow) in windowsToRestore.enumerated() {
             let windowTitle = sessionWindow.title ?? sessionWindow.id
+            let windowDeadline = DispatchTime.now() + windowInterval * Double(windowIndex)
 
             if let match = existing[windowTitle] {
-                // Window exists — upsert missing tabs only.
+                // Window already open — stagger any missing tabs from where we are now.
                 let existingTabTitles = match.tabTitles
-                var addedToThisWindow = 0
-
+                var tabOffset = 0
                 for tab in sessionWindow.tabs {
                     let tabTitle = tab.title ?? windowTitle
-                    if existingTabTitles.contains(tabTitle) {
-                        summary.tabsSkipped += 1
-                        continue
+                    guard !existingTabTitles.contains(tabTitle) else { continue }
+                    tabOffset += 1
+                    let tabDeadline = windowDeadline + tabInterval * Double(tabOffset)
+                    let controller = match.primaryController
+                    DispatchQueue.main.asyncAfter(deadline: tabDeadline) {
+                        addTab(tab, to: controller, ghostty: ghostty)
+                        Ghostty.logger.info("session restore: added missing tab '\(tabTitle)' to '\(windowTitle)'")
                     }
-                    addTab(tab, to: match.primaryController, ghostty: ghostty)
-                    summary.tabsAdded += 1
-                    addedToThisWindow += 1
                 }
-
-                if addedToThisWindow > 0 {
-                    Ghostty.logger.info(
-                        "session restore: window '\(windowTitle)' — added \(addedToThisWindow) tab(s)"
-                    )
-                } else {
-                    Ghostty.logger.info(
-                        "session restore: window '\(windowTitle)' — all tabs already open, skipped"
-                    )
-                }
+                Ghostty.logger.info("session restore: window '\(windowTitle)' exists — \(tabOffset) tab(s) queued")
 
             } else {
-                // Window doesn't exist — create it with all tabs.
-                guard let firstTab = sessionWindow.tabs.first else { continue }
+                guard !sessionWindow.tabs.isEmpty else { continue }
 
-                // Snapshot existing yabai IDs so we can identify the new window.
-                let ourPID = ProcessInfo.processInfo.processIdentifier
-                let existingYabaiIDs = Set(
-                    YabaiHelper.queryWindows()
-                        .filter { $0.pid == ourPID }
-                        .map(\.id)
-                )
-
-                let tree = SplitTree<Ghostty.SurfaceView>(
-                    root: firstTab.surfaceTree.root,
-                    zoomed: nil
-                )
-                let controller = TerminalController(ghostty, withSurfaceTree: tree)
-                controller.showWindow(nil)
-
-                if let title = firstTab.title ?? sessionWindow.title {
-                    controller.titleOverride = title
-                }
-
-                guard let window = controller.window else { continue }
-
-                for tab in sessionWindow.tabs.dropFirst() {
-                    addTab(tab, to: controller, ghostty: ghostty)
-                }
-
-                window.makeKeyAndOrderFront(nil)
-
-                // Place on the correct workspace if recorded.
-                if let targetSpace = sessionWindow.workspace {
-                    placeWindow(
-                        ourPID: ourPID,
-                        existingIDs: existingYabaiIDs,
-                        targetSpace: targetSpace,
-                        windowTitle: windowTitle
+                DispatchQueue.main.asyncAfter(deadline: windowDeadline) {
+                    // Re-snapshot yabai IDs right before creating this window.
+                    let idsBeforeCreate = Set(
+                        YabaiHelper.queryWindows().filter { $0.pid == ourPID }.map(\.id)
                     )
+
+                    let firstTab = sessionWindow.tabs[0]
+                    let tree = SplitTree<Ghostty.SurfaceView>(root: firstTab.surfaceTree.root, zoomed: nil)
+                    let controller = TerminalController(ghostty, withSurfaceTree: tree)
+                    controller.showWindow(nil)
+
+                    if let title = firstTab.title ?? sessionWindow.title {
+                        controller.titleOverride = title
+                    }
+
+                    if let window = controller.window, let screen = window.screen ?? NSScreen.main {
+                        window.setFrame(screen.visibleFrame, display: true)
+                    }
+
+                    let spaceNote = sessionWindow.workspace.map { " → space \($0)" } ?? ""
+                    Ghostty.logger.info(
+                        "session restore: opened '\(windowTitle)'\(spaceNote) — staggering \(sessionWindow.tabs.count - 1) tab(s)"
+                    )
+
+                    // Stagger remaining tabs within this window.
+                    for (tabIndex, tab) in sessionWindow.tabs.dropFirst().enumerated() {
+                        let tabDeadline = DispatchTime.now() + tabInterval * Double(tabIndex + 1)
+                        DispatchQueue.main.asyncAfter(deadline: tabDeadline) {
+                            addTab(tab, to: controller, ghostty: ghostty)
+                            Ghostty.logger.info(
+                                "session restore: added tab \(tabIndex + 1)/\(sessionWindow.tabs.count - 1) to '\(windowTitle)'"
+                            )
+                        }
+                    }
+
+                    // Place window on correct yabai space shortly after it appears.
+                    if let targetSpace = sessionWindow.workspace {
+                        DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1.5) {
+                            placeWindow(
+                                ourPID: ourPID,
+                                existingIDs: idsBeforeCreate,
+                                targetSpace: targetSpace,
+                                windowTitle: windowTitle
+                            )
+                        }
+                    }
                 }
-
-                let stableID = ScriptWindow.stableID(primaryController: controller)
-                windowMap[sessionWindow.id] = stableID
-                summary.windowsCreated += 1
-
-                let spaceNote = sessionWindow.workspace.map { " → space \($0)" } ?? ""
-                Ghostty.logger.info(
-                    "session restore: created window '\(windowTitle)' with \(sessionWindow.tabs.count) tab(s)\(spaceNote)"
-                )
             }
         }
 
-        Ghostty.logger.info("session restore complete — \(summary.description)")
         return windowMap
     }
 
@@ -256,9 +262,6 @@ enum SessionRestorer {
         targetSpace: Int,
         windowTitle: String
     ) {
-        // Give the window manager a moment to register the new window.
-        Thread.sleep(forTimeInterval: 0.3)
-
         let newWindows = YabaiHelper.queryWindows()
             .filter { $0.pid == ourPID && !existingIDs.contains($0.id) }
 

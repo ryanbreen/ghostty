@@ -1,12 +1,13 @@
 import AppKit
 import GhosttyKit
 
-/// Converts the focused tab into a full pod layout: a 3-column, 4-pane split
-/// where every surface lands in the same working directory.
+/// Converts the focused tab into a full pod layout: a 3-column, 5-pane split
+/// where every surface lands in the same working directory and AI agents
+/// are launched in the left column.
 ///
 /// Layout (matches Hive's standard pod):
-///   left  |  middle  |  right-top
-///                     right-bottom
+///   claude (top-left)  |  middle  |  right-top
+///   codex  (bot-left)  |          |  right-bottom
 ///
 /// The conversion adds a new tab with the pod layout, then closes the
 /// original single-pane tab so the user ends up with the expanded view.
@@ -54,24 +55,37 @@ enum PodConverter {
 
     // MARK: - Build the Pod Split Tree
 
-    /// Build a 4-pane pod layout as a SplitTree decoded from JSON.
+    /// Build a 5-pane pod layout as a SplitTree decoded from JSON.
     /// Using JSON as the construction path lets us reuse the exact same
     /// surface initialisation path as session restore.
     ///
-    ///   left (0.33) | middle + right (0.67)
-    ///                 middle (0.5) | right-top + right-bottom (0.5)
-    ///                               right-top (0.5)
-    ///                               right-bottom
+    ///   left-top (claude)    (0.33) | middle + right (0.67)
+    ///   left-bottom (codex)         | middle (0.5) | right-top + right-bottom (0.5)
+    ///                                                right-top (0.5)
+    ///                                                right-bottom
     private static func buildPodTree(directory: String) -> SplitTree<Ghostty.SurfaceView>? {
-        func surface(_ dir: String) -> [String: Any] {
+        func surface(_ dir: String, command: String? = nil) -> [String: Any] {
             let shellEscaped = "'" + dir.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            var input = "cd -- \(shellEscaped)\n"
+            if let command = command {
+                input += command + "\n"
+            }
             return [
                 "pwd": dir,
-                "initialInput": "cd -- \(shellEscaped)\n"
+                "initialInput": input
             ]
         }
 
         let s = surface(directory)
+
+        let leftColumn: [String: Any] = [
+            "split": [
+                "direction": ["vertical": [:]],
+                "ratio": 0.5,
+                "left": ["view": surface(directory, command: "claude")],
+                "right": ["view": surface(directory, command: "codex")]
+            ]
+        ]
 
         let rightColumn: [String: Any] = [
             "split": [
@@ -95,7 +109,7 @@ enum PodConverter {
             "split": [
                 "direction": ["horizontal": [:]],
                 "ratio": 0.33,
-                "left": ["view": s],
+                "left": leftColumn,
                 "right": middleAndRight
             ]
         ]
