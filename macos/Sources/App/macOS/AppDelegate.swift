@@ -951,16 +951,26 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func reloadConfig(_ sender: Any?) {
+        ghostty.reloadConfig()
+    }
+
+    @IBAction func restoreFromLatestHive(_ sender: Any?) {
         let sessionPath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude-pods/ghostty-session.json")
-        if FileManager.default.fileExists(atPath: sessionPath) {
-            do {
-                _ = try SessionRestorer.restore(from: sessionPath, ghostty: ghostty)
-            } catch {
-                Ghostty.logger.error("hive session restore failed: \(error)")
-                ghostty.reloadConfig()
-            }
-        } else {
-            ghostty.reloadConfig()
+        guard FileManager.default.fileExists(atPath: sessionPath) else {
+            let alert = NSAlert()
+            alert.messageText = "No Hive session found"
+            alert.informativeText = "Use Rebuild All in Hive to generate a session file first."
+            alert.runModal()
+            return
+        }
+        do {
+            _ = try SessionRestorer.restore(from: sessionPath, ghostty: ghostty)
+        } catch {
+            Ghostty.logger.error("hive session restore failed: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Restore failed"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
 

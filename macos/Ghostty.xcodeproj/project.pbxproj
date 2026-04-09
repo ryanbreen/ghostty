@@ -617,7 +617,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"$CONFIGURATION\" = \"ReleaseLocal\" ]; then\n    cp -rf \"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME\" /Applications/\nfi\n";
+			shellScript = "if [ \"$CONFIGURATION\" = \"ReleaseLocal\" ]; then\n    cp -rf \"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME\" /Applications/\n    cp -f \"$SRCROOT/../images/GhosttyWRB.icns\" \"/Applications/$FULL_PRODUCT_NAME/Contents/Resources/GhosttyWRB.icns\"\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 		FC501E0B2F46B410007AE49D /* Run SwiftLint */ = {
@@ -757,7 +757,7 @@
 		3B39CAA32B33946300DABEB8 /* ReleaseLocal */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Ghostty;
+				ASSETCATALOG_COMPILER_APPICON_NAME = GhosttyWRB;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CLANG_ENABLE_MODULES = YES;
