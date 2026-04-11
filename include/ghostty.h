@@ -1048,13 +1048,20 @@ typedef struct {
   const char **arguments;
 } ghostty_ipc_action_new_window_s;
 
+// apprt.ipc.Action.ListSurfaces
+typedef struct {
+  const char *response_path;
+} ghostty_ipc_action_list_surfaces_s;
+
 typedef union {
   ghostty_ipc_action_new_window_s new_window;
+  ghostty_ipc_action_list_surfaces_s list_surfaces;
 } ghostty_ipc_action_u;
 
 // apprt.ipc.Action.Key
 typedef enum {
   GHOSTTY_IPC_ACTION_NEW_WINDOW,
+  GHOSTTY_IPC_ACTION_LIST_SURFACES,
 } ghostty_ipc_action_tag_e;
 
 //-------------------------------------------------------------------
@@ -1109,6 +1116,7 @@ GHOSTTY_API void ghostty_surface_update_config(ghostty_surface_t, ghostty_config
 GHOSTTY_API bool ghostty_surface_needs_confirm_quit(ghostty_surface_t);
 GHOSTTY_API bool ghostty_surface_process_exited(ghostty_surface_t);
 GHOSTTY_API uint64_t ghostty_surface_foreground_pid(ghostty_surface_t);
+GHOSTTY_API uint64_t ghostty_surface_child_pid(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_refresh(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_draw(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);

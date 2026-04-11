@@ -158,9 +158,16 @@ class AppDelegate: NSObject,
 
     @MainActor private lazy var menuShortcutManager = Ghostty.MenuShortcutManager()
 
+    private static let listSurfacesIpcNotificationName = Notification.Name(
+        (Bundle.main.bundleIdentifier ?? "com.mitchellh.ghostty") + ".ipc.list-surfaces"
+    )
+
     /// Periodic timer that auto-saves the current session every 30 minutes.
     private var autoSaveSessionTimer: Timer?
     private static let autoSaveSessionInterval: TimeInterval = 30 * 60
+
+    private var menuSessionExplorer: NSMenuItem?
+    private var sessionExplorerWindowController: SessionExplorerWindowController?
 
     override init() {
 #if DEBUG
@@ -222,17 +229,7 @@ class AppDelegate: NSObject,
         // Start our update checker.
         updateController.startUpdater()
 
-        // Schedule periodic session auto-save. Each tick writes a fresh
-        // timestamped snapshot and updates the latest-session pointer so
-        // Restore Session always picks up the most recent layout.
-        autoSaveSessionTimer = Timer.scheduledTimer(
-            timeInterval: AppDelegate.autoSaveSessionInterval,
-            target: self,
-            selector: #selector(autoSaveSessionTick),
-            userInfo: nil,
-            repeats: true
-        )
-        Ghostty.logger.info("session auto-save scheduled every \(Int(AppDelegate.autoSaveSessionInterval / 60)) min")
+        // Session snapshots are manual-only; the periodic auto-save timer is intentionally disabled.
 
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
@@ -287,6 +284,12 @@ class AppDelegate: NSObject,
             selector: #selector(ghosttyNewTab(_:)),
             name: Ghostty.Notification.ghosttyNewTab,
             object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleListSurfacesIpc(_:)),
+            name: Self.listSurfacesIpcNotificationName,
+            object: nil
+        )
 
         // Configure user notifications
         let actions = [
@@ -324,6 +327,7 @@ class AppDelegate: NSObject,
 
         // Setup our menu
         setupMenuImages()
+        setupSessionExplorerMenuItem()
 
         // Setup signal handlers
         setupSignals()
@@ -759,6 +763,29 @@ class AppDelegate: NSObject,
         _ = TerminalController.newTab(ghostty, from: window, withBaseConfig: config)
     }
 
+    @objc private func handleListSurfacesIpc(_ notification: Notification) {
+        guard let responsePath = notification.object as? String, !responsePath.isEmpty else {
+            Self.logger.warning("ignoring malformed +list-surfaces IPC request")
+            return
+        }
+
+        DispatchQueue.main.async {
+            let json = SurfaceListSnapshotter.snapshot()
+            guard let data = json.data(using: .utf8) else {
+                Self.logger.warning("failed to encode +list-surfaces response")
+                return
+            }
+
+            do {
+                try data.write(to: URL(fileURLWithPath: responsePath), options: .atomic)
+            } catch {
+                Self.logger.warning(
+                    "failed to write +list-surfaces response path=\(responsePath, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
     private func setDockBadge() {
         let bellCount = NSApp.windows
             .compactMap { $0.windowController as? BaseTerminalController }
@@ -989,6 +1016,27 @@ class AppDelegate: NSObject,
         AgentLayout.openForFocused(controller: controller, ghostty: ghostty)
     }
 
+    @IBAction func showSessionExplorer(_ sender: Any?) {
+        if let controller = sessionExplorerWindowController,
+           let window = controller.window {
+            controller.showWindow(sender)
+            window.makeKeyAndOrderFront(sender)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let controller = SessionExplorerWindowController()
+        controller.onClose = { [weak self, weak controller] in
+            guard let self, self.sessionExplorerWindowController === controller else { return }
+            self.sessionExplorerWindowController = nil
+        }
+
+        sessionExplorerWindowController = controller
+        controller.showWindow(sender)
+        controller.window?.makeKeyAndOrderFront(sender)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @IBAction func restoreSession(_ sender: Any?) {
         let sessionPath = SessionStorage.symlinkPath.path
         guard FileManager.default.fileExists(atPath: sessionPath) else {
@@ -1011,6 +1059,7 @@ class AppDelegate: NSObject,
 
     /// Snapshot the current session and persist it via SessionStorage.
     /// Used by both the manual Save Session action and the periodic auto-save timer.
+    @MainActor
     @discardableResult
     private func writeSessionSnapshot(reason: String) throws -> URL {
         let json = SessionSnapshotter.snapshot()
@@ -1021,6 +1070,7 @@ class AppDelegate: NSObject,
 
     /// Auto-save the session on a fixed cadence so we always have a recent snapshot
     /// to restore from after a crash or unexpected quit.
+    @MainActor
     @objc private func autoSaveSessionTick() {
         do {
             try writeSessionSnapshot(reason: "auto")
@@ -1224,6 +1274,32 @@ extension AppDelegate {
         self.menuMoveSplitDividerRight?.setImageIfDesired(systemSymbolName: "arrow.right.to.line")
         self.menuFloatOnTop?.setImageIfDesired(systemSymbolName: "square.filled.on.square")
         self.menuFindParent?.setImageIfDesired(systemSymbolName: "text.page.badge.magnifyingglass")
+        self.menuSessionExplorer?.setImageIfDesired(systemSymbolName: "rectangle.split.3x1")
+    }
+
+    private func setupSessionExplorerMenuItem() {
+        guard menuSessionExplorer == nil else { return }
+        guard let viewMenuItem = NSApp.mainMenu?.item(withTitle: "View"),
+              let viewMenu = viewMenuItem.submenu else { return }
+
+        let item = NSMenuItem(
+            title: "Session Explorer",
+            action: #selector(showSessionExplorer(_:)),
+            keyEquivalent: "E"
+        )
+        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = self
+        item.setImageIfDesired(systemSymbolName: "rectangle.split.3x1")
+
+        if let inspectorIndex = viewMenu.items.firstIndex(where: {
+            $0 === self.menuTerminalInspector || $0.title == "Terminal Inspector"
+        }) {
+            viewMenu.insertItem(item, at: inspectorIndex + 1)
+        } else {
+            viewMenu.addItem(item)
+        }
+
+        menuSessionExplorer = item
     }
 
     /// Sync all of our menu item keyboard shortcuts with the Ghostty configuration.

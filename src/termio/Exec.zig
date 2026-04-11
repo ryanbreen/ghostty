@@ -1235,6 +1235,15 @@ const Subprocess = struct {
         const pty = &(self.pty orelse return null);
         return pty.getProcessInfo(info);
     }
+
+    /// Returns the PID of the direct child process spawned for this
+    /// subprocess, if one is available.
+    pub fn childPid(self: *Subprocess) ?u64 {
+        return switch (self.process orelse return null) {
+            .fork_exec => |command| if (command.pid) |pid| @intCast(pid) else null,
+            .flatpak => null,
+        };
+    }
 };
 
 /// The read thread sits in a loop doing the following pseudo code:
@@ -1594,6 +1603,12 @@ fn execCommand(
 /// not available on a particular platform.
 pub fn getProcessInfo(self: *Exec, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
     return self.subprocess.getProcessInfo(info);
+}
+
+/// Returns the PID of the direct child process spawned by this exec backend,
+/// if one is available.
+pub fn childPid(self: *Exec) ?u64 {
+    return self.subprocess.childPid();
 }
 
 test "execCommand darwin: shell command" {

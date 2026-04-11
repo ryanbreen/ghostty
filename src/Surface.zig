@@ -40,6 +40,12 @@ const ProcessInfo = @import("pty.zig").ProcessInfo;
 
 const log = std.log.scoped(.surface);
 
+const LinkMatchCache = struct {
+    text_hash: u64,
+    text_len: usize,
+    valid: bool,
+};
+
 // The renderer implementation to use.
 const Renderer = rendererpkg.Renderer;
 
@@ -261,6 +267,10 @@ const Mouse = struct {
     /// The last x/y in the cursor position for links. We use this to
     /// only process link hover events when the mouse actually moves cells.
     link_point: ?terminal.point.Coordinate = null,
+
+    /// Cache the last matched link text while hovering so that moving within
+    /// the same link region doesn't keep repeating filesystem checks.
+    link_match_cache: ?LinkMatchCache = null,
 };
 
 /// Keyboard state for the surface.
@@ -1656,6 +1666,7 @@ fn mouseRefreshLinks(
 
     // No link, if we're previously over a link then we need to clear
     // the over-link apprt state.
+    self.mouse.link_match_cache = null;
     if (over_link) {
         _ = try self.rt_app.performAction(
             .{ .surface = self },
@@ -2061,27 +2072,135 @@ pub fn pwd(
     return try alloc.dupe(u8, terminal_pwd);
 }
 
-/// Resolves a relative file path to an absolute path using the terminal's pwd.
+fn hasKnownUrlScheme(text: []const u8) bool {
+    const known_schemes = [_][]const u8{
+        "http://",
+        "https://",
+        "mailto:",
+        "ftp://",
+        "file:",
+        "ssh:",
+        "ssh://",
+        "git://",
+        "tel:",
+        "magnet:",
+        "ipfs://",
+        "ipns://",
+        "gemini://",
+        "gopher://",
+        "news:",
+    };
+
+    inline for (known_schemes) |scheme| {
+        if (std.mem.startsWith(u8, text, scheme)) return true;
+    }
+
+    return false;
+}
+
+fn stripLineColSuffix(path: []const u8) []const u8 {
+    var end = path.len;
+    var stripped = false;
+
+    while (true) {
+        const colon = std.mem.lastIndexOfScalar(u8, path[0..end], ':') orelse break;
+        if (colon + 1 >= end) break;
+
+        for (path[colon + 1 .. end]) |c| {
+            if (!std.ascii.isDigit(c)) {
+                return if (stripped) path[0..end] else path;
+            }
+        }
+
+        stripped = true;
+        end = colon;
+    }
+
+    return if (stripped) path[0..end] else path;
+}
+
+fn hasAlnumExtension(path: []const u8) bool {
+    const stripped = stripLineColSuffix(path);
+    const dot = std.mem.lastIndexOfScalar(u8, stripped, '.') orelse return false;
+    if (dot + 1 >= stripped.len) return false;
+
+    for (stripped[dot + 1 ..]) |c| {
+        if (!std.ascii.isAlphanumeric(c)) return false;
+    }
+
+    return true;
+}
+
+fn shouldValidateFilePath(text: []const u8) bool {
+    if (hasKnownUrlScheme(text)) return false;
+    if (std.mem.indexOfScalar(u8, text, '/')) |_| return true;
+    return hasAlnumExtension(text);
+}
+
+fn normalizeFilePath(
+    self: *Surface,
+    alloc: Allocator,
+    path: []const u8,
+) Allocator.Error!?[]const u8 {
+    var normalized = stripLineColSuffix(path);
+    if (normalized.len == 0) return null;
+
+    var home_buf: [std.fs.max_path_bytes]u8 = undefined;
+    normalized = internal_os.expandHome(normalized, &home_buf) catch return null;
+
+    if (std.fs.path.isAbsolute(normalized)) {
+        return try alloc.dupe(u8, normalized);
+    }
+
+    const terminal_pwd = self.io.terminal.getPwd() orelse return null;
+    return try std.fs.path.resolve(alloc, &.{ terminal_pwd, normalized });
+}
+
+fn matchedFilePathExists(
+    self: *Surface,
+    text: []const u8,
+) !bool {
+    const text_hash = std.hash.Wyhash.hash(0, text);
+    if (self.mouse.link_match_cache) |cache| {
+        if (cache.text_hash == text_hash and cache.text_len == text.len) {
+            return cache.valid;
+        }
+    }
+
+    var path_buf: [std.fs.max_path_bytes * 2]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&path_buf);
+    const normalized = self.normalizeFilePath(fba.allocator(), text) catch |err| switch (err) {
+        error.OutOfMemory => null,
+    };
+
+    const valid = if (normalized) |path_| valid: {
+        _ = std.fs.cwd().statFile(path_) catch break :valid false;
+        break :valid true;
+    } else false;
+
+    self.mouse.link_match_cache = .{
+        .text_hash = text_hash,
+        .text_len = text.len,
+        .valid = valid,
+    };
+
+    return valid;
+}
+
+/// Resolves a file path to an absolute path using the terminal's pwd when
+/// necessary and only returns paths that exist on disk.
 fn resolvePathForOpening(
     self: *Surface,
     path: []const u8,
 ) Allocator.Error!?[]const u8 {
-    if (!std.fs.path.isAbsolute(path)) {
-        const terminal_pwd = self.io.terminal.getPwd() orelse {
-            return null;
-        };
+    if (!shouldValidateFilePath(path)) return null;
 
-        const resolved = try std.fs.path.resolve(self.alloc, &.{ terminal_pwd, path });
-
-        std.fs.accessAbsolute(resolved, .{}) catch {
-            self.alloc.free(resolved);
-            return null;
-        };
-
-        return resolved;
-    }
-
-    return null;
+    const resolved = try self.normalizeFilePath(self.alloc, path) orelse return null;
+    std.fs.cwd().statFile(resolved) catch {
+        self.alloc.free(resolved);
+        return null;
+    };
+    return resolved;
 }
 
 /// Returns the x/y coordinate of where the IME (Input Method Editor)
@@ -4319,6 +4438,23 @@ fn linkAtPin(
             defer match.deinit();
             const sel = match.selection();
             if (!sel.contains(screen, mouse_pin)) continue;
+
+            switch (link.action) {
+                .open => {
+                    const starts = match.region.starts();
+                    const ends = match.region.ends();
+                    const start_idx: usize = match.offset + @as(usize, @intCast(starts[0]));
+                    const end_idx: usize = match.offset + @as(usize, @intCast(ends[0]));
+                    const match_text = strmap.string[start_idx..end_idx];
+
+                    if (shouldValidateFilePath(match_text) and !try self.matchedFilePathExists(match_text)) {
+                        continue;
+                    }
+                },
+
+                ._open_osc8 => {},
+            }
+
             return .{
                 .action = link.action,
                 .selection = sel,
@@ -4485,6 +4621,7 @@ pub fn cursorPosCallback(
     if (pos.x < 0 or pos.y < 0) {
         // Reset our hyperlink state
         self.mouse.link_point = null;
+        self.mouse.link_match_cache = null;
         if (self.mouse.over_link) {
             self.mouse.over_link = false;
             _ = try self.rt_app.performAction(
@@ -6369,6 +6506,12 @@ fn testMouseSelectionIsNull(
 /// not available on a particular platform.
 pub fn getProcessInfo(self: *Surface, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
     return self.io.getProcessInfo(info);
+}
+
+/// Returns the PID of the direct child process spawned for this surface, if
+/// one is available.
+pub fn childPid(self: *Surface) ?u64 {
+    return self.io.childPid();
 }
 
 test "Surface: selection logic" {

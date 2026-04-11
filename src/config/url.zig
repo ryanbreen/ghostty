@@ -72,6 +72,10 @@ const any_path_space_segments =
     \\(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]+)*
 ;
 
+const quoted_path_search_limit =
+    \\1024
+;
+
 // Branch 1: URLs with explicit schemes (http, mailto, ftp, etc.).
 const scheme_url_branch =
     "(?:" ++ url_schemes ++ ")" ++
@@ -116,8 +120,32 @@ const bare_relative_path_branch =
     no_trailing_colon ++
     trailing_spaces_at_eol;
 
+// Branch 4: Quoted file paths should extend through internal spaces until the
+// matching closing quote. We cap the scan to 1024 bytes to bound the work for
+// very long unmatched quoted strings.
+const quoted_path_prefix =
+    "(?:" ++ rooted_or_relative_path_prefix ++ "|" ++ bare_relative_path_prefix ++ ")";
+
+const single_quoted_path_branch =
+    "(?<=')" ++
+    "(?=[^'\\r\\n]{1," ++ quoted_path_search_limit ++ "}')" ++
+    quoted_path_prefix ++
+    "[^'\\r\\n]*" ++
+    "(?=')";
+
+const double_quoted_path_branch =
+    "(?<=\")" ++
+    "(?=[^\"\\r\\n]{1," ++ quoted_path_search_limit ++ "}\")" ++
+    quoted_path_prefix ++
+    "[^\"\\r\\n]*" ++
+    "(?=\")";
+
 pub const regex =
     scheme_url_branch ++
+    "|" ++
+    single_quoted_path_branch ++
+    "|" ++
+    double_quoted_path_branch ++
     "|" ++
     rooted_or_relative_path_branch ++
     "|" ++
@@ -495,6 +523,14 @@ test "url regex" {
         .{
             .input = "built src/config/url.zig.",
             .expect = "src/config/url.zig",
+        },
+        .{
+            .input = "see '/path/to/my file.txt' here",
+            .expect = "/path/to/my file.txt",
+        },
+        .{
+            .input = "open \"/tmp/some path/file.txt\" now",
+            .expect = "/tmp/some path/file.txt",
         },
     };
 

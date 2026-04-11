@@ -10,6 +10,7 @@ const assert = @import("../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
 const objc = @import("objc");
 const apprt = @import("../apprt.zig");
+const build_config = @import("../build_config.zig");
 const font = @import("../font/main.zig");
 const input = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
@@ -328,14 +329,89 @@ pub const App = struct {
     /// some other process that is not Ghostty) there is no full-featured apprt App
     /// to use.
     pub fn performIpc(
-        _: Allocator,
+        alloc: Allocator,
         _: apprt.ipc.Target,
         comptime action: apprt.ipc.Action.Key,
-        _: apprt.ipc.Action.Value(action),
+        value: apprt.ipc.Action.Value(action),
     ) (Allocator.Error || std.posix.WriteError || apprt.ipc.Errors)!bool {
         switch (action) {
             .new_window => return false,
+            .list_surfaces => {
+                if (comptime !builtin.target.os.tag.isDarwin()) return false;
+                return try performIpcListSurfaces(alloc, value);
+            },
         }
+    }
+
+    fn performIpcListSurfaces(
+        alloc: Allocator,
+        value: apprt.ipc.Action.ListSurfaces,
+    ) (Allocator.Error || apprt.ipc.Errors)!bool {
+        const pool = objc.AutoreleasePool.init();
+        defer pool.deinit();
+
+        const NSString = objc.getClass("NSString") orelse return error.IPCFailed;
+        const NSBundle = objc.getClass("NSBundle") orelse return error.IPCFailed;
+        const NSDistributedNotificationCenter = objc.getClass("NSDistributedNotificationCenter") orelse
+            return error.IPCFailed;
+        const main_bundle = NSBundle.msgSend(
+            objc.Object,
+            objc.sel("mainBundle"),
+            .{},
+        );
+        if (main_bundle.value == null) return error.IPCFailed;
+
+        var runtime_bundle_id: []const u8 = build_config.bundle_id;
+        const bundle_id = main_bundle.msgSend(
+            objc.Object,
+            objc.sel("bundleIdentifier"),
+            .{},
+        );
+        if (bundle_id.value != null) {
+            if (bundle_id.msgSend(?[*:0]const u8, objc.sel("UTF8String"), .{})) |c_str| {
+                runtime_bundle_id = std.mem.sliceTo(c_str, 0);
+            }
+        }
+
+        const notification_name_ = try std.fmt.allocPrint(
+            alloc,
+            "{s}.ipc.list-surfaces",
+            .{runtime_bundle_id},
+        );
+        defer alloc.free(notification_name_);
+        const notification_name = try alloc.dupeZ(u8, notification_name_);
+        defer alloc.free(notification_name);
+        const center = NSDistributedNotificationCenter.msgSend(
+            objc.Object,
+            objc.sel("defaultCenter"),
+            .{},
+        );
+        if (center.value == null) return error.IPCFailed;
+
+        const name = NSString.msgSend(
+            objc.Object,
+            objc.sel("stringWithUTF8String:"),
+            .{notification_name.ptr},
+        );
+        const object = NSString.msgSend(
+            objc.Object,
+            objc.sel("stringWithUTF8String:"),
+            .{value.response_path.ptr},
+        );
+        if (name.value == null or object.value == null) return error.IPCFailed;
+
+        center.msgSend(
+            void,
+            objc.sel("postNotificationName:object:userInfo:deliverImmediately:"),
+            .{
+                name,
+                object,
+                @as(?*anyopaque, null),
+                true,
+            },
+        );
+
+        return true;
     }
 };
 
@@ -1602,6 +1678,12 @@ pub const CAPI = struct {
     /// Returns 0 if the information is not available.
     export fn ghostty_surface_foreground_pid(surface: *Surface) u64 {
         return surface.core_surface.getProcessInfo(.foreground_pid) orelse 0;
+    }
+
+    /// Returns the PID of the direct child process running in the terminal.
+    /// Returns 0 if the information is not available.
+    export fn ghostty_surface_child_pid(surface: *Surface) u64 {
+        return surface.core_surface.childPid() orelse 0;
     }
 
     /// Returns true if the surface has a selection.

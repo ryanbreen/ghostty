@@ -110,6 +110,14 @@ pub const Backend = union(Kind) {
             .exec => |*exec| exec.getProcessInfo(info),
         };
     }
+
+    /// Returns the PID of the direct child process associated with this
+    /// backend, if one is available.
+    pub fn childPid(self: *Backend) ?u64 {
+        return switch (self.*) {
+            .exec => |*exec| exec.childPid(),
+        };
+    }
 };
 
 /// Termio thread data. See termio.ThreadData for docs.

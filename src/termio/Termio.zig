@@ -755,3 +755,9 @@ pub const ThreadData = struct {
 pub fn getProcessInfo(self: *Termio, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
     return self.backend.getProcessInfo(info);
 }
+
+/// Returns the PID of the direct child process spawned by the backend,
+/// if one is available.
+pub fn childPid(self: *Termio) ?u64 {
+    return self.backend.childPid();
+}

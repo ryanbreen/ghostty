@@ -73,6 +73,9 @@ pub const Action = union(enum) {
     /// The arguments to pass to Ghostty as the command.
     new_window: NewWindow,
 
+    /// Request a JSON listing of all currently open terminal surfaces.
+    list_surfaces: ListSurfaces,
+
     pub const NewWindow = struct {
         /// A list of command arguments to launch in the new window. If this is
         /// `null` the command configured in the config or the user's default
@@ -110,9 +113,26 @@ pub const Action = union(enum) {
         }
     };
 
+    pub const ListSurfaces = struct {
+        /// The absolute file path that the running Ghostty instance should
+        /// write the JSON response to.
+        response_path: [:0]const u8,
+
+        pub const C = extern struct {
+            response_path: [*:0]const u8,
+        };
+
+        pub fn cval(self: *ListSurfaces, _: Allocator) Allocator.Error!ListSurfaces.C {
+            return .{
+                .response_path = self.response_path.ptr,
+            };
+        }
+    };
+
     /// Sync with: ghostty_ipc_action_tag_e
     pub const Key = enum(c_int) {
         new_window,
+        list_surfaces,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_IPC_ACTION_");
