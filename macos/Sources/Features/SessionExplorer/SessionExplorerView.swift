@@ -190,6 +190,26 @@ struct SessionExplorerStatusBadge: View {
     }
 }
 
+struct SessionExplorerWorkspaceBadge: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundColor(.explorerMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.explorerSurface3.opacity(0.65))
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color.explorerBorder.opacity(0.85), lineWidth: 1)
+            }
+    }
+}
+
 struct SessionExplorerStatusDot: View {
     let status: DiffStatus
     let size: CGFloat

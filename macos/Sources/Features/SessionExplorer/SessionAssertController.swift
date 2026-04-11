@@ -97,6 +97,10 @@ final class SessionAssertController {
         do {
             try json.write(toFile: path, atomically: true, encoding: .utf8)
             explorerDebugLog("snapshotCurrent saved pre-assert snapshot: \(path)")
+            NotificationCenter.default.post(
+                name: .ghosttySessionsDidChange,
+                object: URL(fileURLWithPath: path)
+            )
             return path
         } catch {
             explorerDebugLog("snapshotCurrent failed to save pre-assert snapshot: error=\(error)")
@@ -184,9 +188,19 @@ final class SessionAssertController {
         case .view(let view):
             return ["view": encodeSurfaceView(view)]
         case .split(let split):
+            // SplitTree.Direction uses Swift's synthesized Codable, which
+            // expects the case-tagged dict form (e.g. ["horizontal": [:]]).
+            // A plain string here would make SessionRestorer fail with a
+            // typeMismatch during decode.
+            let directionDict: [String: Any] = {
+                switch split.direction.lowercased() {
+                case "vertical": return ["vertical": [:] as [String: Any]]
+                default:         return ["horizontal": [:] as [String: Any]]
+                }
+            }()
             return [
                 "split": [
-                    "direction": split.direction,
+                    "direction": directionDict,
                     "ratio": split.ratio,
                     "left": try encodeSurfaceNode(split.left),
                     "right": try encodeSurfaceNode(split.right),
@@ -204,6 +218,17 @@ final class SessionAssertController {
 
         if let title = nonEmpty(view.title) {
             record["title"] = title
+        }
+
+        // Pass initialInput and command through so edits in the saved
+        // snapshot (e.g. "claude --resume <id>") actually reach the
+        // restored surface instead of getting dropped here.
+        if let initialInput = view.initialInput, !initialInput.isEmpty {
+            record["initialInput"] = initialInput
+        }
+
+        if let command = nonEmpty(view.command) {
+            record["command"] = command
         }
 
         return record

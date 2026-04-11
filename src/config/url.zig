@@ -64,12 +64,18 @@ const non_dotted_path_lookahead =
     \\(?![\w\-.~:\/?#@!$&*+;=%]*\.)
 ;
 
-const dotted_path_space_segments =
-    \\(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]*[\/.])*
-;
-
-const any_path_space_segments =
-    \\(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]+)*
+// Spaced path continuation is bounded to eight speculative segments so a long
+// line can't trigger unbounded backtracking while scanning spaces.
+const path_space_segments =
+    "(?:(?<!:) (?!\\w+://)(?!\\.{0,2}/)(?!~/)" ++
+    "(?:" ++
+    "(?=(?!/)" ++ path_chars ++ "*" ++ "/" ++ path_chars ++ "*(?:\\s|$))" ++
+    path_chars ++ "+" ++
+    "|" ++
+    "(?=(?!/)" ++ path_chars ++ "*\\.[A-Za-z0-9]{1,8}(?:\\s|$))" ++
+    path_chars ++ "+" ++
+    "))"
+    ++ "{0,8}"
 ;
 
 const quoted_path_search_limit =
@@ -87,21 +93,21 @@ const rooted_or_relative_path_prefix =
 ;
 
 // Branch 2: Absolute paths and dot-relative paths (/, ./, ../).
-// A dotted segment is treated as file-like, while the undotted case stays
-// broad to capture directory-like paths with spaces.
+// Spaced continuation only survives if the next token still looks path-like
+// under the bounded speculative lookahead above.
 const rooted_or_relative_path_branch =
     rooted_or_relative_path_prefix ++
     "(?:" ++
     dotted_path_lookahead ++
     path_chars ++ "+" ++
-    dotted_path_space_segments ++
+    path_space_segments ++
     no_trailing_punctuation ++
     no_trailing_colon ++
     trailing_spaces_at_eol ++
     "|" ++
     non_dotted_path_lookahead ++
     path_chars ++ "+" ++
-    any_path_space_segments ++
+    path_space_segments ++
     no_trailing_punctuation ++
     no_trailing_colon ++
     trailing_spaces_at_eol ++
@@ -378,8 +384,24 @@ test "url regex" {
             .expect = "./spaces-end",
         },
         .{
+            .input = "open /Applications/Ghostty Dev.app please",
+            .expect = "/Applications/Ghostty Dev.app",
+        },
+        .{
+            .input = "/Applications/Ghostty Dev.app and similar paths now match as a single link",
+            .expect = "/Applications/Ghostty Dev.app",
+        },
+        .{
+            .input = "see /Users/wrb/My Documents/notes.txt here",
+            .expect = "/Users/wrb/My Documents/notes.txt",
+        },
+        .{
             .input = "./space middle",
-            .expect = "./space middle",
+            .expect = "./space",
+        },
+        .{
+            .input = "/tmp/some folder/file.swift more",
+            .expect = "/tmp/some folder/file.swift",
         },
         .{
             .input = "../test folder/file.txt",
@@ -401,6 +423,10 @@ test "url regex" {
         // Two space-separated absolute paths should match only the first
         .{
             .input = "/tmp/foo /tmp/bar",
+            .expect = "/tmp/foo",
+        },
+        .{
+            .input = "/tmp/foo bar",
             .expect = "/tmp/foo",
         },
         .{
@@ -496,11 +522,11 @@ test "url regex" {
         // comma should stop matching in spaced path segments
         .{
             .input = "./foo bar,baz",
-            .expect = "./foo bar",
+            .expect = "./foo",
         },
         .{
             .input = "/tmp/foo bar,baz",
-            .expect = "/tmp/foo bar",
+            .expect = "/tmp/foo",
         },
         // trailing colon should not be part of the path
         .{
@@ -535,8 +561,6 @@ test "url regex" {
     };
 
     for (cases) |case| {
-        //std.debug.print("input: {s}\n", .{case.input});
-        //std.debug.print("match: {s}\n", .{case.expect});
         var reg = try re.search(case.input, .{});
         //std.debug.print("count: {d}\n", .{@as(usize, reg.count())});
         //std.debug.print("starts: {d}\n", .{reg.starts()});

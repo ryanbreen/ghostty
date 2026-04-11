@@ -15,6 +15,26 @@ final class SessionStore: ObservableObject {
         var tabCount: Int { snapshot.windows.flatMap(\.tabs).count }
     }
 
+    private var changeObserver: NSObjectProtocol?
+
+    init() {
+        // Reload whenever anyone (manual Save Session, auto-save timer, or the
+        // Session Explorer's Snapshot Current button) writes a snapshot to disk.
+        changeObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttySessionsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.loadSessions()
+        }
+    }
+
+    deinit {
+        if let obs = changeObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
     func loadSessions() {
         let fileManager = FileManager.default
 

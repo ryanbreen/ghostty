@@ -113,9 +113,12 @@ enum SessionSnapshotter {
             return ["view": surface]
 
         case .split(let split):
-            let direction: String = switch split.direction {
-            case .horizontal: "horizontal"
-            case .vertical: "vertical"
+            // SplitTree.Direction uses Swift's synthesized Codable, which
+            // expects the case-tagged dictionary form. Writing a plain string
+            // here would make the restorer fail with a typeMismatch error.
+            let direction: [String: Any] = switch split.direction {
+            case .horizontal: ["horizontal": [:] as [String: Any]]
+            case .vertical:   ["vertical":   [:] as [String: Any]]
             }
             var splitDict: [String: Any] = [
                 "direction": direction,

@@ -2196,7 +2196,7 @@ fn resolvePathForOpening(
     if (!shouldValidateFilePath(path)) return null;
 
     const resolved = try self.normalizeFilePath(self.alloc, path) orelse return null;
-    std.fs.cwd().statFile(resolved) catch {
+    _ = std.fs.cwd().statFile(resolved) catch {
         self.alloc.free(resolved);
         return null;
     };

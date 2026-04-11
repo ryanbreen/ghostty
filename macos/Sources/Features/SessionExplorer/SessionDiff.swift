@@ -261,6 +261,7 @@ struct WindowDiff: Identifiable {
     let tabs: [TabDiff]
 
     var title: String { sessionWindow.title ?? sessionWindow.id }
+    var workspace: Int? { sessionWindow.workspace }
     var tabDiffs: [TabDiff] { tabs }
 }
 
@@ -287,6 +288,20 @@ struct PaneDiff: Identifiable {
     var positionLabel: String { position }
     var workingDirectory: String { sessionView.pwd ?? "unknown" }
     var processName: String { sessionView.foregroundProcess ?? "" }
+
+    /// The configured startup command for this pane, if any. Prefers explicit
+    /// `command`, falls back to the trailing line of `initialInput` (since we
+    /// typically encode commands as "cd ...\n<cmd>\n" or just "<cmd>\n"),
+    /// ignoring leading `cd ...` lines so the UI shows the interesting part.
+    var startupCommand: String? {
+        if let cmd = sessionView.command, !cmd.isEmpty { return cmd }
+        guard let input = sessionView.initialInput, !input.isEmpty else { return nil }
+        let lines = input
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { String($0) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("cd ") && !$0.hasPrefix("cd\t") }
+        return lines.last
+    }
 }
 
 enum DiffStatus: Equatable {

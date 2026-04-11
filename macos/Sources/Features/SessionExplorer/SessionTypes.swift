@@ -89,11 +89,61 @@ struct ExplorerWindow: Codable, Identifiable {
     let workspace: Int?
     let tabs: [ExplorerTab]
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case workspace
+        case space
+        case tabs
+    }
+
     init(id: String, title: String? = nil, workspace: Int? = nil, tabs: [ExplorerTab]) {
         self.id = id
         self.title = title
         self.workspace = workspace
         self.tabs = tabs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        tabs = try container.decode([ExplorerTab].self, forKey: .tabs)
+        workspace = try Self.decodeWorkspace(from: container)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(workspace, forKey: .workspace)
+        try container.encode(tabs, forKey: .tabs)
+    }
+
+    private static func decodeWorkspace(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Int? {
+        func decodeWorkspace(for key: CodingKeys) throws -> Int? {
+            if let intValue = try? container.decode(Int.self, forKey: key) {
+                return intValue
+            }
+
+            if let stringValue = try? container.decode(String.self, forKey: key) {
+                return Int(stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+
+            if let doubleValue = try? container.decode(Double.self, forKey: key) {
+                return Int(doubleValue)
+            }
+
+            return nil
+        }
+
+        if let workspace = try decodeWorkspace(for: .workspace) {
+            return workspace
+        }
+
+        return try decodeWorkspace(for: .space)
     }
 }
 
@@ -162,6 +212,12 @@ struct ExplorerSurfaceView: Codable {
     let foregroundPid: Int?
     let foregroundProcess: String?
     let processExited: Bool?
+    /// Optional shell input that should be piped into the surface on startup
+    /// (e.g. `"claude --resume <id>\n"`). Preserved through load/assert/restore
+    /// so manual edits to saved snapshots survive the round-trip.
+    let initialInput: String?
+    /// Optional explicit command to launch instead of the user's default shell.
+    let command: String?
 
     init(
         id: String? = nil,
@@ -169,7 +225,9 @@ struct ExplorerSurfaceView: Codable {
         title: String? = nil,
         foregroundPid: Int? = nil,
         foregroundProcess: String? = nil,
-        processExited: Bool? = nil
+        processExited: Bool? = nil,
+        initialInput: String? = nil,
+        command: String? = nil
     ) {
         self.id = id
         self.pwd = pwd
@@ -177,6 +235,8 @@ struct ExplorerSurfaceView: Codable {
         self.foregroundPid = foregroundPid
         self.foregroundProcess = foregroundProcess
         self.processExited = processExited
+        self.initialInput = initialInput
+        self.command = command
     }
 }
 
@@ -185,6 +245,60 @@ struct ExplorerSurfaceSplit: Codable {
     let ratio: Double
     let left: ExplorerSurfaceNode
     let right: ExplorerSurfaceNode
+
+    private enum CodingKeys: String, CodingKey {
+        case direction
+        case ratio
+        case left
+        case right
+    }
+
+    init(direction: String, ratio: Double, left: ExplorerSurfaceNode, right: ExplorerSurfaceNode) {
+        self.direction = direction
+        self.ratio = ratio
+        self.left = left
+        self.right = right
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // SplitTree.Direction is encoded by Swift's synthesized Codable as a
+        // tagged dict (e.g. {"horizontal": {}}). Older snapshots wrote a plain
+        // string. Accept either form and normalize to a lowercased string.
+        if let str = try? container.decode(String.self, forKey: .direction) {
+            self.direction = str
+        } else if let dict = try? container.decode([String: AnyCodable].self, forKey: .direction),
+                  let key = dict.keys.first {
+            self.direction = key
+        } else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .direction,
+                in: container,
+                debugDescription: "direction must be a string or tagged dict"
+            )
+        }
+        self.ratio = try container.decode(Double.self, forKey: .ratio)
+        self.left = try container.decode(ExplorerSurfaceNode.self, forKey: .left)
+        self.right = try container.decode(ExplorerSurfaceNode.self, forKey: .right)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(direction, forKey: .direction)
+        try container.encode(ratio, forKey: .ratio)
+        try container.encode(left, forKey: .left)
+        try container.encode(right, forKey: .right)
+    }
+}
+
+/// Minimal Codable wrapper that lets us decode arbitrary JSON values when we
+/// only need to peek at keys (used by ExplorerSurfaceSplit's tolerant
+/// direction decoder).
+private struct AnyCodable: Codable {
+    init(from decoder: Decoder) throws {
+        _ = try decoder.singleValueContainer()
+    }
+    func encode(to encoder: Encoder) throws {}
 }
 
 extension ExplorerWindow {

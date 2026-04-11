@@ -65,14 +65,20 @@ struct WindowCardView: View {
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .animation(.easeInOut(duration: 0.15), value: isExpanded)
 
-            HStack(spacing: 0) {
-                Text(windowDiff.title)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundColor(Color.explorerText)
+            HStack(spacing: 8) {
+                HStack(spacing: 0) {
+                    Text(windowDiff.title)
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(Color.explorerText)
 
-                Text(" — \(windowDiff.tabDiffs.count) \(windowDiff.tabDiffs.count == 1 ? "tab" : "tabs")")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(Color.explorerMuted)
+                    Text(" — \(windowDiff.tabDiffs.count) \(windowDiff.tabDiffs.count == 1 ? "tab" : "tabs")")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(Color.explorerMuted)
+                }
+
+                if let workspace = windowDiff.workspace {
+                    SessionExplorerWorkspaceBadge(label: "Space \(workspace)")
+                }
             }
 
             Spacer(minLength: 16)

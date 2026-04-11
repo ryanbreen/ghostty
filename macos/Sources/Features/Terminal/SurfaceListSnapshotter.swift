@@ -39,12 +39,20 @@ enum SurfaceListSnapshotter {
         let tabIndex = tabControllers.firstIndex(where: { $0 === controller }) ?? 0
         let tabTitle = controller.titleOverride ?? window.title
 
+        // In AppKit's tabbed-window model every tab is its own NSWindow with a
+        // distinct `windowNumber`. Grouping the flat snapshot back into windows
+        // requires a stable ID shared by all tabs in the same tab group, so we
+        // use the windowNumber of the first (primary) tab here. Fall back to
+        // this tab's own windowNumber for single-window controllers.
+        let groupWindowID = window.tabGroup?.windows.first?.windowNumber ?? window.windowNumber
+        let groupWindowTitle = window.tabGroup?.windows.first?.title ?? window.title
+
         return root.leaves().map { view in
             let workingDirectory: Any = view.pwd ?? NSNull()
             var surface: [String: Any] = [
                 "surface_id": view.id.uuidString,
-                "window_id": window.windowNumber,
-                "window_title": window.title,
+                "window_id": groupWindowID,
+                "window_title": groupWindowTitle,
                 "tab_index": tabIndex,
                 "tab_title": tabTitle,
                 "split_path": splitPath(for: view, in: root),

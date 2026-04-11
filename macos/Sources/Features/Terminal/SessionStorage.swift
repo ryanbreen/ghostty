@@ -1,5 +1,11 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted whenever a session snapshot is written to disk. Any observer
+    /// (e.g. a running Session Explorer) should reload its session list.
+    static let ghosttySessionsDidChange = Notification.Name("GhosttySessionsDidChange")
+}
+
 /// Writes session JSON to ~/.config/ghostty/sessions/ with a timestamped filename
 /// and updates ~/.config/ghostty/sessions/latest.json as a symlink to the most
 /// recent snapshot. Both manual Save Session and the periodic auto-save go
@@ -34,6 +40,8 @@ enum SessionStorage {
         // Atomically update the "latest" symlink to point at this snapshot.
         try? fm.removeItem(at: symlinkPath)
         try fm.createSymbolicLink(at: symlinkPath, withDestinationURL: dest)
+
+        NotificationCenter.default.post(name: .ghosttySessionsDidChange, object: dest)
 
         return dest
     }
